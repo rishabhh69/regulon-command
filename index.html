@@ -141,18 +141,39 @@
 
   <body class="dark">
     <!-- Suppress CSP violation noise from Chrome extensions (they trigger console errors
-         that are NOT caused by our code). This listener must load before any extension
-         content-scripts run. -->
+         that are NOT caused by our code). Chrome logs CSP violations to the console
+         BEFORE the securitypolicyviolation event fires, so the only reliable way to
+         suppress the console error is to intercept console.error itself.
+         This listener must load before any extension content-scripts run. -->
     <script>
-      document.addEventListener('securitypolicyviolation', function(e) {
-        if (
-          (e.blockedURI && e.blockedURI.indexOf('chrome-extension://') === 0) ||
-          (e.sourceFile && e.sourceFile.indexOf('chrome-extension://') === 0)
-        ) {
-          e.stopImmediatePropagation();
-          e.preventDefault();
-        }
-      });
+      (function() {
+        // 1. Override console.error to swallow Chrome-extension CSP noise
+        var _origError = console.error;
+        console.error = function() {
+          // Check if any argument looks like a Chrome-extension CSP violation
+          for (var i = 0; i < arguments.length; i++) {
+            var arg = arguments[i];
+            if (typeof arg === 'string' && arg.indexOf('Content Security Policy') !== -1 &&
+                arg.indexOf('chrome-extension://') !== -1) {
+              return; // swallow — this is extension noise, not our code
+            }
+          }
+          return _origError.apply(console, arguments);
+        };
+        // 2. Belt-and-suspenders: also intercept the DOM event
+        document.addEventListener('securitypolicyviolation', function(e) {
+          var isExtension =
+            (e.blockedURI && e.blockedURI.indexOf('chrome-extension://') === 0) ||
+            (e.sourceFile && e.sourceFile.indexOf('chrome-extension://') === 0) ||
+            (e.violatedDirective && e.violatedDirective.indexOf('chrome-extension://') !== -1) ||
+            (e.originalPolicy && e.originalPolicy.indexOf('chrome-extension://') !== -1) ||
+            (e.blockedURI === 'eval' && e.sourceFile && e.sourceFile.indexOf('extension') !== -1);
+          if (isExtension) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+          }
+        });
+      })();
     </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
